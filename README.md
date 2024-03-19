@@ -21,5 +21,5 @@ go install github.com/prasant-paudel/xml-hydra@latest
 xml-hydra -t https://example.com/xmlrpc.php -u username -w passwords.txt
 ```
 ```
-xml-hydra -t https://example.com/xmlrpc.php -u username -w passwords.txt -g 2
+xml-hydra -t https://example.com/xmlrpc.php -u username -w passwords.txt -P proxies.txt -g 10
 ```
