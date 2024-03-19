@@ -106,7 +106,7 @@ func main() {
 
 	for r := range resCh {
 		if r.Error != nil {
-			fmt.Printf("\n[!] Error checking (%s:%s)\n%s", r.Request.Username, r.Request.Password, r.Error)
+			fmt.Printf("\n[!] Error checking (%s:%s)\n%s", r.Request.Username, r.Request.Password, r.Error.Error())
 		} else if r.Match {
 			fmt.Printf("\n[+] Matched -> %s:%s\n", r.Request.Username, r.Request.Password)
 			break
@@ -127,14 +127,19 @@ func CreateRequests(url, username string, passwords []string, ch chan<- Request)
 		}
 	} else {
 		pp := NewProxyPool(ReadFileLines(proxyList))
-		proto := strings.Split(targetUrl, "://")[0]
+		schemeRegex := regexp.MustCompile(`(\w+:\/\/)`)
+
 		for _, pw := range passwords {
-			pUrl := fmt.Sprintf("%s://%s", proto, pp.GetItem())
+			proxyUrl := fmt.Sprint(pp.GetItem())
+			if !schemeRegex.MatchString(proxyUrl) {
+				proxyUrl = schemeRegex.FindString(url) + proxyUrl
+			}
+
 			ch <- Request{
 				URL:      url,
 				Username: username,
 				Password: pw,
-				ProxyURL: pUrl,
+				ProxyURL: proxyUrl,
 			}
 		}
 	}
@@ -161,19 +166,8 @@ func (r *Request) Body() io.Reader {
 
 func (r *Request) Send() Response {
 	req, _ := http.NewRequest("POST", r.URL, r.Body())
-	var client http.Client
 
-	if r.ProxyURL != "" {
-		proxyURL, err := url.Parse(r.ProxyURL)
-		if err != nil {
-			log.Printf("[!] Failed to parse proxy %s", r.ProxyURL)
-		}
-		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
-		client = http.Client{Transport: transport}
-	} else {
-		client = http.Client{}
-	}
-
+	client := CreateHTTPCLient(r.ProxyURL)
 	res, err := client.Do(req)
 
 	if err != nil {
@@ -195,6 +189,20 @@ func (r *Request) Send() Response {
 		Match:   re.Match(body),
 		Request: *r,
 	}
+}
+
+func CreateHTTPCLient(proxyUrl string) (client http.Client) {
+	if proxyUrl != "" {
+		proxyURL, err := url.Parse(proxyUrl)
+		if err != nil {
+			log.Printf("[!] Failed to parse proxy %s", proxyUrl)
+		}
+		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		client = http.Client{Transport: transport}
+	} else {
+		client = http.Client{}
+	}
+	return
 }
 
 func NewProxyPool(items []string) *CircularList {
