@@ -1,5 +1,5 @@
 # XML-Hydra
-XML-Hydra is a tool to bruteforce user passwords via public facing XML-RPC interface in an Wordpress application.
+XML-Hydra is a tool to bruteforce user passwords via public facing XML-RPC interface in a Wordpress application.
 
 ## Installation
 ```
