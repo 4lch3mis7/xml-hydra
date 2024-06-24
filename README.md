@@ -3,7 +3,7 @@ XML-Hydra is a tool to bruteforce user passwords via public facing XML-RPC inter
 
 ## Installation
 ```
-go install github.com/prasant-paudel/xml-hydra@latest
+go install github.com/4lch3mis7/xml-hydra@latest
 ```
 
 ## Usage
